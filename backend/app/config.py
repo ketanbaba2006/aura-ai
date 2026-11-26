@@ -44,8 +44,21 @@ class Settings(BaseSettings):
     RESEARCH_SOURCES_LIMIT: int = 8
     RESEARCH_TIMEOUT: int = 300
 
-    # Database
-    DATABASE_PATH: str = str(Path(__file__).parent.parent.parent / "aura.db")
+    # Database (PostgreSQL)
+    DATABASE_URL: str | None = None
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str = "aura"
+    POSTGRES_PASSWORD: str = "aura_password"
+    POSTGRES_DB: str = "aura_ai"
+
+    # SMTP / Email verification
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM_EMAIL: str = "noreply@auraainet.xyz"
+    SMTP_FROM_NAME: str = "AURA AI"
 
     # CORS
     CORS_ORIGINS: list[str] = [

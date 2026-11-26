@@ -518,17 +518,21 @@ export function ChatInput({
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed) return;
+    if (isStreaming) {
+      onStop();
+      return;
+    }
     onSend(trimmed);
     setInput("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [input, isStreaming, onSend]);
+  }, [input, isStreaming, onSend, onStop]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if ((e.key === "Enter" || e.keyCode === 13) && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
@@ -834,23 +838,23 @@ export function ChatInput({
           ) : (
             <button
               onClick={handleSend}
-              disabled={!hasText}
+              type="button"
               style={{
                 width: "36px",
                 height: "36px",
                 borderRadius: "50%",
                 border: "none",
-                cursor: hasText ? "pointer" : "not-allowed",
+                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 color: hasText ? "var(--bg-primary)" : "var(--text-muted)",
                 flexShrink: 0,
                 outline: "none",
-                background: hasText ? "var(--text-primary)" : "rgba(255, 255, 255, 0.05)",
-                transition: "background 0.2s ease",
+                background: hasText ? "var(--text-primary)" : "rgba(255, 255, 255, 0.08)",
+                transition: "background 0.2s ease, opacity 0.2s ease",
               }}
-              title="Send"
+              title="Send (Enter)"
             >
               <div
                 style={{

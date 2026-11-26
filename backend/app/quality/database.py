@@ -1,27 +1,192 @@
 """
-AURA AI Quality Engine — Database Schema Extensions (MongoDB)
-Adds collections for quality gates, defects, repair registry, and project specifications.
-Uses Motor async MongoDB driver via the existing `db` instance.
+AURA AI Quality Engine — PostgreSQL Schema Extensions
+
+Uses asyncpg to connect to PostgreSQL. All quality engine data
+(gates, defects, repair registry, project specifications) lives in
+PostgreSQL tables — no MongoDB.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from app.database.database import db
+import asyncpg
 
-# ─── Collection Names ──────────────────────────────────────────────────
+from app.config import settings
 
-COL_QUALITY_PROJECTS = "quality_projects"
-COL_QUALITY_GATES = "quality_gates"
-COL_DEFECTS = "defects"
-COL_REPAIR_REGISTRY = "repair_registry"
-COL_PROJECT_REPAIR_HISTORY = "project_repair_history"
-COL_REGRESSION_RULES = "regression_rules"
-COL_PROJECT_QUALITY_SPECS = "project_quality_specs"
+logger = logging.getLogger(__name__)
 
-# ─── Gate Definitions ──────────────────────────────────────────────────
+# ─── Connection ─────────────────────────────────────────────────────────
+
+_pg_pool: Any = None
+
+
+async def get_pg_pool() -> Any:
+    """Get or create the asyncpg connection pool."""
+    global _pg_pool
+    if _pg_pool is None:
+        database_url = settings.DATABASE_URL or (
+            f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
+            f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
+        )
+        _pg_pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
+        logger.info("PostgreSQL pool created for quality engine")
+    return _pg_pool
+
+
+async def close_pg_pool() -> None:
+    """Close the asyncpg connection pool."""
+    global _pg_pool
+    if _pg_pool is not None:
+        await _pg_pool.close()
+        _pg_pool = None
+
+
+# ─── Table Definitions ──────────────────────────────────────────────────
+
+QUALITY_TABLES = {
+    "quality_projects": """
+        CREATE TABLE IF NOT EXISTS quality_projects (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL UNIQUE,
+            tech_stack JSONB NOT NULL DEFAULT '{}',
+            spec_version INTEGER NOT NULL DEFAULT 1,
+            registered_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_validated_at TIMESTAMP
+        )
+    """,
+    "quality_gates": """
+        CREATE TABLE IF NOT EXISTS quality_gates (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            gate_number INTEGER NOT NULL,
+            gate_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            results JSONB DEFAULT '{}',
+            evidence JSONB DEFAULT '{}',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE(project_id, gate_number)
+        )
+    """,
+    "defects": """
+        CREATE TABLE IF NOT EXISTS defects (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            gate_id TEXT,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            file_path TEXT,
+            line_start INTEGER,
+            line_end INTEGER,
+            evidence TEXT NOT NULL,
+            root_cause TEXT,
+            assigned_agent TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            resolved_at TIMESTAMP
+        )
+    """,
+    "repair_registry": """
+        CREATE TABLE IF NOT EXISTS repair_registry (
+            id TEXT PRIMARY KEY,
+            error_fingerprint TEXT NOT NULL UNIQUE,
+            error_category TEXT NOT NULL,
+            technologies JSONB NOT NULL DEFAULT '[]',
+            root_cause TEXT NOT NULL,
+            solution_pattern TEXT NOT NULL,
+            validation_method TEXT NOT NULL,
+            regression_test JSONB,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            confidence REAL NOT NULL DEFAULT 0.0,
+            is_global BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_verified_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """,
+    "project_repair_history": """
+        CREATE TABLE IF NOT EXISTS project_repair_history (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            defect_id TEXT NOT NULL,
+            repair_registry_id TEXT,
+            patch_applied TEXT,
+            validation_result JSONB DEFAULT '{}',
+            success BOOLEAN NOT NULL,
+            applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """,
+    "regression_rules": """
+        CREATE TABLE IF NOT EXISTS regression_rules (
+            id TEXT PRIMARY KEY,
+            repair_registry_id TEXT NOT NULL,
+            rule_type TEXT NOT NULL,
+            rule_config JSONB NOT NULL DEFAULT '{}',
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """,
+    "project_quality_specs": """
+        CREATE TABLE IF NOT EXISTS project_quality_specs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            user_requirements TEXT,
+            application_type TEXT,
+            technology_stack JSONB NOT NULL DEFAULT '{}',
+            project_architecture TEXT,
+            design_specification TEXT,
+            component_requirements JSONB DEFAULT '{}',
+            api_contracts JSONB DEFAULT '{}',
+            data_models JSONB DEFAULT '{}',
+            responsive_requirements TEXT,
+            security_requirements TEXT,
+            performance_expectations TEXT,
+            functional_acceptance_criteria JSONB DEFAULT '[]',
+            testing_requirements JSONB DEFAULT '[]',
+            deployment_constraints TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE(project_id, version)
+        )
+    """,
+    "verification_codes": """
+        CREATE TABLE IF NOT EXISTS verification_codes (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            code TEXT NOT NULL,
+            code_type TEXT NOT NULL DEFAULT 'email_verification',
+            expires_at TIMESTAMP NOT NULL,
+            used BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """,
+}
+
+QUALITY_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_quality_projects_project_id ON quality_projects(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_quality_gates_project_id ON quality_gates(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_quality_gates_status ON quality_gates(status)",
+    "CREATE INDEX IF NOT EXISTS idx_defects_project_id ON defects(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_defects_gate_id ON defects(gate_id)",
+    "CREATE INDEX IF NOT EXISTS idx_defects_category ON defects(category)",
+    "CREATE INDEX IF NOT EXISTS idx_defects_severity ON defects(severity)",
+    "CREATE INDEX IF NOT EXISTS idx_defects_status ON defects(status)",
+    "CREATE INDEX IF NOT EXISTS idx_defects_file_path ON defects(file_path)",
+    "CREATE INDEX IF NOT EXISTS idx_repair_registry_fingerprint ON repair_registry(error_fingerprint)",
+    "CREATE INDEX IF NOT EXISTS idx_repair_registry_category ON repair_registry(error_category)",
+    "CREATE INDEX IF NOT EXISTS idx_project_repair_history_project_id ON project_repair_history(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_project_repair_history_defect_id ON project_repair_history(defect_id)",
+    "CREATE INDEX IF NOT EXISTS idx_regression_rules_registry_id ON regression_rules(repair_registry_id)",
+    "CREATE INDEX IF NOT EXISTS idx_project_quality_specs_project_id ON project_quality_specs(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_verification_codes_email ON verification_codes(email)",
+    "CREATE INDEX IF NOT EXISTS idx_verification_codes_code ON verification_codes(code)",
+    "CREATE INDEX IF NOT EXISTS idx_verification_codes_expires ON verification_codes(expires_at)",
+]
 
 GATE_DEFINITIONS = [
     (1, "Requirements", "Project requirements are clear and recorded"),
@@ -48,73 +213,157 @@ DEFECT_CATEGORIES = [
 DEFECT_SEVERITIES = ["critical", "high", "medium", "low"]
 
 
-# ─── Schema Initialization ─────────────────────────────────────────────
+# ─── Schema Initialization ──────────────────────────────────────────────
 
 async def initialize_quality_schema() -> None:
-    """Create all quality engine collections and indexes."""
-    database = db.db
+    """Create all quality engine tables and indexes in PostgreSQL."""
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        for table_name, ddl in QUALITY_TABLES.items():
+            await conn.execute(ddl)
+            logger.debug(f"Ensured table: {table_name}")
+        for idx_ddl in QUALITY_INDEXES:
+            await conn.execute(idx_ddl)
+        logger.info("PostgreSQL quality schema initialized")
 
-    index_specs = [
-        (COL_QUALITY_PROJECTS, [("project_id", 1)], True),
-        (COL_QUALITY_GATES, [("project_id", 1), ("gate_number", 1)], True),
-        (COL_QUALITY_GATES, [("status", 1)], False),
-        (COL_DEFECTS, [("project_id", 1)], False),
-        (COL_DEFECTS, [("gate_id", 1)], False),
-        (COL_DEFECTS, [("category", 1)], False),
-        (COL_DEFECTS, [("severity", 1)], False),
-        (COL_DEFECTS, [("status", 1)], False),
-        (COL_DEFECTS, [("file_path", 1)], False),
-        (COL_REPAIR_REGISTRY, [("error_fingerprint", 1)], True),
-        (COL_REPAIR_REGISTRY, [("error_category", 1)], False),
-        (COL_PROJECT_REPAIR_HISTORY, [("project_id", 1)], False),
-        (COL_PROJECT_REPAIR_HISTORY, [("defect_id", 1)], False),
-        (COL_REGRESSION_RULES, [("repair_registry_id", 1)], False),
-        (COL_REGRESSION_RULES, [("rule_type", 1)], False),
-        (COL_PROJECT_QUALITY_SPECS, [("project_id", 1), ("version", 1)], True),
-    ]
 
-    for collection_name, keys, unique in index_specs:
+def _json_dumps(obj: Any) -> str:
+    return json.dumps(obj, default=str)
+
+
+def _json_loads(val: Any) -> Any:
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        return val
+    if isinstance(val, str):
         try:
-            await database[collection_name].create_index(keys, unique=unique)
-        except Exception:
-            pass
+            return json.loads(val)
+        except (json.JSONDecodeError, ValueError):
+            return val
+    return val
 
 
-# ─── Quality Project Registration ──────────────────────────────────────
+def _row_to_dict(row: Any) -> dict:
+    """Convert an asyncpg Record to a dict, parsing JSONB fields."""
+    d = dict(row)
+    json_keys = (
+        "tech_stack", "results", "evidence", "component_requirements",
+        "api_contracts", "data_models", "functional_acceptance_criteria",
+        "testing_requirements", "technology_stack", "regression_test",
+        "rule_config", "technologies",
+    )
+    for key in json_keys:
+        if key in d and d[key] is not None and isinstance(d[key], str):
+            try:
+                d[key] = json.loads(d[key])
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return d
+
+
+# ─── Verification Codes ─────────────────────────────────────────────────
+
+async def create_verification_code(
+    email: str,
+    code: str,
+    code_type: str = "email_verification",
+    ttl_minutes: int = 10,
+) -> str:
+    """Store a verification code for email verification / password reset."""
+    code_id = str(uuid.uuid4())
+    expires_at = datetime.utcnow() + __import__("timedelta", fromlist=["timedelta"]).timedelta(minutes=ttl_minutes)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO verification_codes (id, email, code, code_type, expires_at)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            code_id, email.lower(), code, code_type, expires_at
+        )
+    return code_id
+
+
+async def verify_code(email: str, code: str, code_type: str = "email_verification") -> bool:
+    """Verify a code: marks it used if valid and not expired."""
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, used, expires_at FROM verification_codes
+            WHERE email = $1 AND code = $2 AND code_type = $3 AND used = FALSE
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            email.lower(), code, code_type
+        )
+        if not row:
+            return False
+        if row["expires_at"] and row["expires_at"] < datetime.utcnow():
+            return False
+        await conn.execute(
+            "UPDATE verification_codes SET used = TRUE WHERE id = $1",
+            row["id"]
+        )
+        return True
+
+
+async def invalidate_verification_codes(email: str, code_type: str) -> None:
+    """Mark all unused codes of a type as used (after successful verification)."""
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE verification_codes
+            SET used = TRUE
+            WHERE email = $1 AND code_type = $2 AND used = FALSE
+            """,
+            email.lower(), code_type
+        )
+
+
+# ─── Quality Project Registration ───────────────────────────────────────
 
 async def register_quality_project(project_id: str, tech_stack: dict) -> str:
     """Register a project with the quality engine. Returns quality_project id."""
     qp_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-
-    await db.db[COL_QUALITY_PROJECTS].update_one(
-        {"project_id": project_id},
-        {
-            "$set": {
-                "id": qp_id,
-                "project_id": project_id,
-                "tech_stack": tech_stack,
-                "registered_at": now,
-                "last_validated_at": now,
-            }
-        },
-        upsert=True,
-    )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO quality_projects (id, project_id, tech_stack, registered_at, last_validated_at)
+            VALUES ($1, $2, $3, $4, $4)
+            ON CONFLICT (project_id) DO UPDATE SET
+                tech_stack = EXCLUDED.tech_stack,
+                last_validated_at = EXCLUDED.last_validated_at
+            """,
+            qp_id, project_id, _json_dumps(tech_stack), now
+        )
     return qp_id
 
 
 async def get_quality_project(project_id: str) -> dict | None:
     """Get quality project registration by project_id."""
-    return await db.db[COL_QUALITY_PROJECTS].find_one({"project_id": project_id})
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM quality_projects WHERE project_id = $1", project_id
+        )
+        if row:
+            return _row_to_dict(row)
+    return None
 
 
 async def update_quality_project_validation(project_id: str) -> None:
     """Update last_validated_at timestamp."""
     now = datetime.utcnow().isoformat()
-    await db.db[COL_QUALITY_PROJECTS].update_one(
-        {"project_id": project_id},
-        {"$set": {"last_validated_at": now}},
-    )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE quality_projects SET last_validated_at = $1 WHERE project_id = $2",
+            now, project_id
+        )
 
 
 # ─── Quality Gates ─────────────────────────────────────────────────────
@@ -123,43 +372,34 @@ async def initialize_quality_gates(project_id: str) -> list[dict]:
     """Create all 12 quality gates for a project in pending state."""
     gates = []
     now = datetime.utcnow().isoformat()
-
-    for gate_num, gate_name, _ in GATE_DEFINITIONS:
-        gate_id = str(uuid.uuid4())
-        gate_doc = {
-            "id": gate_id,
-            "project_id": project_id,
-            "gate_number": gate_num,
-            "gate_name": gate_name,
-            "status": "pending",
-            "started_at": None,
-            "completed_at": None,
-            "results": {},
-            "evidence": {},
-            "created_at": now,
-        }
-        await db.db[COL_QUALITY_GATES].update_one(
-            {"project_id": project_id, "gate_number": gate_num},
-            {"$set": gate_doc},
-            upsert=True,
-        )
-        gates.append(
-            {
-                "id": gate_id,
-                "gate_number": gate_num,
-                "gate_name": gate_name,
-                "status": "pending",
-            }
-        )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        for gate_num, gate_name, _ in GATE_DEFINITIONS:
+            gate_id = str(uuid.uuid4())
+            await conn.execute(
+                """
+                INSERT INTO quality_gates (id, project_id, gate_number, gate_name, status, created_at)
+                VALUES ($1, $2, $3, $4, 'pending', $5)
+                ON CONFLICT (project_id, gate_number) DO UPDATE SET
+                    status = 'pending'
+                """,
+                gate_id, project_id, gate_num, gate_name, now
+            )
+            gates.append(
+                {"id": gate_id, "gate_number": gate_num, "gate_name": gate_name, "status": "pending"}
+            )
     return gates
 
 
 async def get_quality_gates(project_id: str) -> list[dict]:
     """Get all quality gates for a project."""
-    cursor = db.db[COL_QUALITY_GATES].find(
-        {"project_id": project_id}
-    ).sort("gate_number", 1)
-    return [doc async for doc in cursor]
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM quality_gates WHERE project_id = $1 ORDER BY gate_number",
+            project_id
+        )
+        return [_row_to_dict(r) for r in rows]
 
 
 async def update_gate_status(
@@ -170,19 +410,35 @@ async def update_gate_status(
 ) -> None:
     """Update a quality gate's status and results."""
     now = datetime.utcnow().isoformat()
-    updates: dict = {"status": status}
-
-    if status == "running":
-        updates["started_at"] = now
-    elif status in ("passed", "failed", "skipped"):
-        updates["completed_at"] = now
-
-    if results is not None:
-        updates["results"] = results
-    if evidence is not None:
-        updates["evidence"] = evidence
-
-    await db.db[COL_QUALITY_GATES].update_one({"id": gate_id}, {"$set": updates})
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if status == "running":
+            await conn.execute(
+                """
+                UPDATE quality_gates
+                SET status = $1, started_at = $2, results = $3, evidence = $4
+                WHERE id = $5
+                """,
+                status, now, _json_dumps(results or {}), _json_dumps(evidence or {}), gate_id
+            )
+        elif status in ("passed", "failed", "skipped"):
+            await conn.execute(
+                """
+                UPDATE quality_gates
+                SET status = $1, completed_at = $2, results = $3, evidence = $4
+                WHERE id = $5
+                """,
+                status, now, _json_dumps(results or {}), _json_dumps(evidence or {}), gate_id
+            )
+        else:
+            await conn.execute(
+                """
+                UPDATE quality_gates
+                SET status = $1, results = $2, evidence = $3
+                WHERE id = $4
+                """,
+                status, _json_dumps(results or {}), _json_dumps(evidence or {}), gate_id
+            )
 
 
 # ─── Defects ───────────────────────────────────────────────────────────
@@ -192,12 +448,12 @@ async def create_defect(
     category: str,
     severity: str,
     evidence: str,
-    gate_id: str | None = None,
-    file_path: str | None = None,
-    line_start: int | None = None,
-    line_end: int | None = None,
-    root_cause: str | None = None,
-    assigned_agent: str | None = None,
+    gate_id: Optional[str] = None,
+    file_path: Optional[str] = None,
+    line_start: Optional[int] = None,
+    line_end: Optional[int] = None,
+    root_cause: Optional[str] = None,
+    assigned_agent: Optional[str] = None,
 ) -> str:
     """Create a new defect record."""
     if category not in DEFECT_CATEGORIES:
@@ -207,91 +463,126 @@ async def create_defect(
 
     defect_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-
-    defect_doc = {
-        "id": defect_id,
-        "project_id": project_id,
-        "gate_id": gate_id,
-        "category": category,
-        "severity": severity,
-        "file_path": file_path,
-        "line_start": line_start,
-        "line_end": line_end,
-        "evidence": evidence,
-        "root_cause": root_cause,
-        "assigned_agent": assigned_agent,
-        "status": "open",
-        "created_at": now,
-        "resolved_at": None,
-    }
-
-    await db.db[COL_DEFECTS].insert_one(defect_doc)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO defects
+            (id, project_id, gate_id, category, severity, file_path,
+             line_start, line_end, evidence, root_cause, assigned_agent, status, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'open', $12)
+            """,
+            defect_id, project_id, gate_id, category, severity, file_path,
+            line_start, line_end, evidence, root_cause, assigned_agent, now
+        )
     return defect_id
 
 
 async def get_defects(
     project_id: str,
-    status: str | None = None,
-    severity: str | None = None,
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
 ) -> list[dict]:
     """Get defects for a project with optional filters."""
-    query: dict = {"project_id": project_id}
-    if status:
-        query["status"] = status
-    if severity:
-        query["severity"] = severity
+    query = "SELECT * FROM defects WHERE project_id = $1"
+    params: list[Any] = [project_id]
+    param_idx = 2
 
-    cursor = db.db[COL_DEFECTS].find(query).sort("created_at", -1)
-    return [doc async for doc in cursor]
+    if status:
+        query += f" AND status = ${param_idx}"
+        params.append(status)
+        param_idx += 1
+    if severity:
+        query += f" AND severity = ${param_idx}"
+        params.append(severity)
+        param_idx += 1
+
+    query += " ORDER BY created_at DESC"
+
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+        return [_row_to_dict(r) for r in rows]
 
 
 async def update_defect_status(
     defect_id: str,
     status: str,
-    root_cause: str | None = None,
-    assigned_agent: str | None = None,
-    repair_id: str | None = None,
+    root_cause: Optional[str] = None,
+    assigned_agent: Optional[str] = None,
+    repair_id: Optional[str] = None,
 ) -> None:
     """Update defect status and related fields."""
-    updates: dict = {"status": status}
-
-    if root_cause is not None:
-        updates["root_cause"] = root_cause
-    if assigned_agent is not None:
-        updates["assigned_agent"] = assigned_agent
-    if repair_id is not None:
-        updates["repair_id"] = repair_id
-    if status in ("verified", "closed"):
-        updates["resolved_at"] = datetime.utcnow().isoformat()
-
-    await db.db[COL_DEFECTS].update_one({"id": defect_id}, {"$set": updates})
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if status in ("verified", "closed"):
+            await conn.execute(
+                """
+                UPDATE defects
+                SET status = $1, root_cause = COALESCE($2, root_cause),
+                    assigned_agent = COALESCE($3, assigned_agent),
+                    repair_id = COALESCE($4, repair_id),
+                    resolved_at = $5
+                WHERE id = $6
+                """,
+                status, root_cause, assigned_agent, repair_id,
+                datetime.utcnow().isoformat(), defect_id
+            )
+        else:
+            await conn.execute(
+                """
+                UPDATE defects
+                SET status = $1, root_cause = COALESCE($2, root_cause),
+                    assigned_agent = COALESCE($3, assigned_agent),
+                    repair_id = COALESCE($4, repair_id)
+                WHERE id = $5
+                """,
+                status, root_cause, assigned_agent, repair_id, defect_id
+            )
 
 
 # ─── Global Repair Registry ────────────────────────────────────────────
 
 async def find_repair_pattern(error_fingerprint: str) -> dict | None:
     """Find a repair pattern by error fingerprint."""
-    return await db.db[COL_REPAIR_REGISTRY].find_one(
-        {"error_fingerprint": error_fingerprint, "is_global": True}
-    )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM repair_registry WHERE error_fingerprint = $1 AND is_global = TRUE",
+            error_fingerprint
+        )
+        if row:
+            return _row_to_dict(row)
+    return None
 
 
 async def find_repair_patterns_by_category(
-    category: str, technologies: list[str] | None = None
+    category: str, technologies: Optional[list[str]] = None
 ) -> list[dict]:
     """Find repair patterns by category and optional technology filter."""
-    query: dict = {"error_category": category, "is_global": True}
-
-    if technologies:
-        tech_conditions = []
-        for t in technologies:
-            tech_conditions.append({"technologies": t})
-        query["$or"] = tech_conditions
-
-    cursor = db.db[COL_REPAIR_REGISTRY].find(query).sort(
-        [("confidence", -1), ("success_count", -1)]
-    )
-    return [doc async for doc in cursor]
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if technologies:
+            conditions = " OR ".join(
+                [f"technologies @> ${i + 2}::jsonb" for i in range(len(technologies))]
+            )
+            query = (
+                f"SELECT * FROM repair_registry "
+                f"WHERE error_category = $1 AND is_global = TRUE AND ({conditions}) "
+                f"ORDER BY confidence DESC, success_count DESC"
+            )
+            json_params = [json.dumps([t]) for t in technologies]
+            rows = await conn.fetch(query, category, *json_params)
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM repair_registry
+                WHERE error_category = $1 AND is_global = TRUE
+                ORDER BY confidence DESC, success_count DESC
+                """,
+                category
+            )
+        return [_row_to_dict(r) for r in rows]
 
 
 async def create_repair_pattern(
@@ -301,75 +592,58 @@ async def create_repair_pattern(
     root_cause: str,
     solution_pattern: str,
     validation_method: str,
-    regression_test: dict | None = None,
+    regression_test: Optional[dict] = None,
     confidence: float = 0.5,
     is_global: bool = True,
 ) -> str:
     """Create or update a repair pattern in the global registry."""
     pattern_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-
-    pattern_doc = {
-        "id": pattern_id,
-        "error_fingerprint": error_fingerprint,
-        "error_category": error_category,
-        "technologies": technologies,
-        "root_cause": root_cause,
-        "solution_pattern": solution_pattern,
-        "validation_method": validation_method,
-        "regression_test": regression_test,
-        "confidence": confidence,
-        "is_global": is_global,
-        "created_at": now,
-        "last_verified_at": now,
-    }
-
-    await db.db[COL_REPAIR_REGISTRY].update_one(
-        {"error_fingerprint": error_fingerprint},
-        {
-            "$setOnInsert": {
-                "id": pattern_id,
-                "error_fingerprint": error_fingerprint,
-                "error_category": error_category,
-                "technologies": technologies,
-                "root_cause": root_cause,
-                "solution_pattern": solution_pattern,
-                "validation_method": validation_method,
-                "regression_test": regression_test,
-                "success_count": 0,
-                "failure_count": 0,
-                "confidence": confidence,
-                "is_global": is_global,
-                "created_at": now,
-                "last_verified_at": now,
-            },
-            "$set": {
-                "last_verified_at": now,
-                "confidence": max(confidence, 0.0),
-            },
-            "$inc": {"success_count": 1},
-        },
-        upsert=True,
-    )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO repair_registry
+            (id, error_fingerprint, error_category, technologies, root_cause,
+             solution_pattern, validation_method, regression_test,
+             confidence, is_global, created_at, last_verified_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+            ON CONFLICT (error_fingerprint) DO UPDATE SET
+                success_count = repair_registry.success_count + 1,
+                last_verified_at = EXCLUDED.last_verified_at,
+                confidence = GREATEST(repair_registry.confidence, EXCLUDED.confidence)
+            """,
+            pattern_id, error_fingerprint, error_category,
+            _json_dumps(technologies), root_cause, solution_pattern,
+            validation_method, _json_dumps(regression_test) if regression_test else None,
+            confidence, is_global, now
+        )
     return pattern_id
 
 
 async def update_repair_outcome(pattern_id: str, success: bool) -> None:
     """Update success/failure counts for a repair pattern."""
     now = datetime.utcnow().isoformat()
-    if success:
-        await db.db[COL_REPAIR_REGISTRY].update_one(
-            {"id": pattern_id},
-            {
-                "$inc": {"success_count": 1},
-                "$set": {"last_verified_at": now},
-            },
-        )
-    else:
-        await db.db[COL_REPAIR_REGISTRY].update_one(
-            {"id": pattern_id},
-            {"$inc": {"failure_count": 1}},
-        )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if success:
+            await conn.execute(
+                """
+                UPDATE repair_registry
+                SET success_count = success_count + 1, last_verified_at = $1
+                WHERE id = $2
+                """,
+                now, pattern_id
+            )
+        else:
+            await conn.execute(
+                """
+                UPDATE repair_registry
+                SET failure_count = failure_count + 1
+                WHERE id = $1
+                """,
+                pattern_id
+            )
 
 
 # ─── Project Repair History ────────────────────────────────────────────
@@ -377,38 +651,41 @@ async def update_repair_outcome(pattern_id: str, success: bool) -> None:
 async def record_repair_attempt(
     project_id: str,
     defect_id: str,
-    repair_registry_id: str | None = None,
-    patch_applied: str | None = None,
-    validation_result: dict | None = None,
+    repair_registry_id: Optional[str] = None,
+    patch_applied: Optional[str] = None,
+    validation_result: Optional[dict] = None,
     success: bool = False,
 ) -> str:
     """Record a repair attempt in project history."""
     history_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-
-    history_doc = {
-        "id": history_id,
-        "project_id": project_id,
-        "defect_id": defect_id,
-        "repair_registry_id": repair_registry_id,
-        "patch_applied": patch_applied,
-        "validation_result": validation_result or {},
-        "success": success,
-        "applied_at": now,
-    }
-
-    await db.db[COL_PROJECT_REPAIR_HISTORY].insert_one(history_doc)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO project_repair_history
+            (id, project_id, defect_id, repair_registry_id, patch_applied,
+             validation_result, success, applied_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            history_id, project_id, defect_id, repair_registry_id,
+            patch_applied, _json_dumps(validation_result or {}), success, now
+        )
     return history_id
 
 
 async def get_project_repair_history(project_id: str) -> list[dict]:
     """Get all repair attempts for a project."""
-    cursor = (
-        db.db[COL_PROJECT_REPAIR_HISTORY]
-        .find({"project_id": project_id})
-        .sort("applied_at", -1)
-    )
-    return [doc async for doc in cursor]
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM project_repair_history
+            WHERE project_id = $1 ORDER BY applied_at DESC
+            """,
+            project_id
+        )
+        return [_row_to_dict(r) for r in rows]
 
 
 # ─── Regression Rules ──────────────────────────────────────────────────
@@ -421,28 +698,41 @@ async def create_regression_rule(
     """Create a regression prevention rule from a verified repair pattern."""
     rule_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-
-    rule_doc = {
-        "id": rule_id,
-        "repair_registry_id": repair_registry_id,
-        "rule_type": rule_type,
-        "rule_config": rule_config,
-        "active": True,
-        "created_at": now,
-    }
-
-    await db.db[COL_REGRESSION_RULES].insert_one(rule_doc)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO regression_rules
+            (id, repair_registry_id, rule_type, rule_config, active, created_at)
+            VALUES ($1, $2, $3, $4, TRUE, $5)
+            """,
+            rule_id, repair_registry_id, rule_type, _json_dumps(rule_config), now
+        )
     return rule_id
 
 
-async def get_active_regression_rules(rule_type: str | None = None) -> list[dict]:
+async def get_active_regression_rules(rule_type: Optional[str] = None) -> list[dict]:
     """Get all active regression rules, optionally filtered by type."""
-    query: dict = {"active": True}
-    if rule_type:
-        query["rule_type"] = rule_type
-
-    cursor = db.db[COL_REGRESSION_RULES].find(query).sort("created_at", -1)
-    return [doc async for doc in cursor]
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if rule_type:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM regression_rules
+                WHERE active = TRUE AND rule_type = $1
+                ORDER BY created_at DESC
+                """,
+                rule_type
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM regression_rules
+                WHERE active = TRUE
+                ORDER BY created_at DESC
+                """
+            )
+        return [_row_to_dict(r) for r in rows]
 
 
 # ─── Project Quality Specification ─────────────────────────────────────
@@ -455,36 +745,54 @@ async def create_quality_spec(
     """Create or update a project quality specification."""
     spec_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-
-    spec_doc = {
-        "id": spec_id,
-        "project_id": project_id,
-        "version": version,
-        "user_requirements": spec_data.get("user_requirements"),
-        "application_type": spec_data.get("application_type"),
-        "technology_stack": spec_data.get("technology_stack", {}),
-        "project_architecture": spec_data.get("project_architecture"),
-        "design_specification": spec_data.get("design_specification"),
-        "component_requirements": spec_data.get("component_requirements", {}),
-        "api_contracts": spec_data.get("api_contracts", {}),
-        "data_models": spec_data.get("data_models", {}),
-        "responsive_requirements": spec_data.get("responsive_requirements"),
-        "security_requirements": spec_data.get("security_requirements"),
-        "performance_expectations": spec_data.get("performance_expectations"),
-        "functional_acceptance_criteria": spec_data.get(
-            "functional_acceptance_criteria", []
-        ),
-        "testing_requirements": spec_data.get("testing_requirements", []),
-        "deployment_constraints": spec_data.get("deployment_constraints"),
-        "created_at": now,
-        "updated_at": now,
-    }
-
-    await db.db[COL_PROJECT_QUALITY_SPECS].update_one(
-        {"project_id": project_id, "version": version},
-        {"$set": spec_doc},
-        upsert=True,
-    )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO project_quality_specs
+            (id, project_id, version, user_requirements, application_type,
+             technology_stack, project_architecture, design_specification,
+             component_requirements, api_contracts, data_models,
+             responsive_requirements, security_requirements,
+             performance_expectations, functional_acceptance_criteria,
+             testing_requirements, deployment_constraints,
+             created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                    $12, $13, $14, $15, $16, $17, $18, $18)
+            ON CONFLICT (project_id, version) DO UPDATE SET
+                user_requirements = EXCLUDED.user_requirements,
+                application_type = EXCLUDED.application_type,
+                technology_stack = EXCLUDED.technology_stack,
+                project_architecture = EXCLUDED.project_architecture,
+                design_specification = EXCLUDED.design_specification,
+                component_requirements = EXCLUDED.component_requirements,
+                api_contracts = EXCLUDED.api_contracts,
+                data_models = EXCLUDED.data_models,
+                responsive_requirements = EXCLUDED.responsive_requirements,
+                security_requirements = EXCLUDED.security_requirements,
+                performance_expectations = EXCLUDED.performance_expectations,
+                functional_acceptance_criteria = EXCLUDED.functional_acceptance_criteria,
+                testing_requirements = EXCLUDED.testing_requirements,
+                deployment_constraints = EXCLUDED.deployment_constraints,
+                updated_at = EXCLUDED.updated_at
+            """,
+            spec_id, project_id, version,
+            spec_data.get("user_requirements"),
+            spec_data.get("application_type"),
+            _json_dumps(spec_data.get("technology_stack", {})),
+            spec_data.get("project_architecture"),
+            spec_data.get("design_specification"),
+            _json_dumps(spec_data.get("component_requirements", {})),
+            _json_dumps(spec_data.get("api_contracts", {})),
+            _json_dumps(spec_data.get("data_models", {})),
+            spec_data.get("responsive_requirements"),
+            spec_data.get("security_requirements"),
+            spec_data.get("performance_expectations"),
+            _json_dumps(spec_data.get("functional_acceptance_criteria", [])),
+            _json_dumps(spec_data.get("testing_requirements", [])),
+            spec_data.get("deployment_constraints"),
+            now
+        )
     return spec_id
 
 
@@ -492,82 +800,99 @@ async def get_quality_spec(
     project_id: str, version: Optional[int] = None
 ) -> dict | None:
     """Get the quality specification for a project."""
-    query: dict = {"project_id": project_id}
-    if version:
-        query["version"] = version
-    else:
-        result = await db.db[COL_PROJECT_QUALITY_SPECS].find(
-            query
-        ).sort("version", -1).limit(1).to_list(length=1)
-        return result[0] if result else None
-
-    return await db.db[COL_PROJECT_QUALITY_SPECS].find_one(query)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if version:
+            row = await conn.fetchrow(
+                "SELECT * FROM project_quality_specs WHERE project_id = $1 AND version = $2",
+                project_id, version
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM project_quality_specs
+                WHERE project_id = $1 ORDER BY version DESC LIMIT 1
+                """,
+                project_id
+            )
+        if row:
+            return _row_to_dict(row)
+    return None
 
 
 # ─── Dashboard Aggregates ──────────────────────────────────────────────
 
 async def get_project_quality_summary(project_id: str) -> dict:
     """Get aggregated quality status for dashboard."""
-    gates_cursor = db.db[COL_QUALITY_GATES].find(
-        {"project_id": project_id}
-    ).sort("gate_number", 1)
-    gates = [doc async for doc in gates_cursor]
-
-    severity_pipeline = [
-        {"$match": {"project_id": project_id}},
-        {"$group": {"_id": "$severity", "count": {"$sum": 1}}},
-    ]
-    severity_rows = await db.db[COL_DEFECTS].aggregate(severity_pipeline).to_list(None)
-
-    status_pipeline = [
-        {"$match": {"project_id": project_id}},
-        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
-    ]
-    status_rows = await db.db[COL_DEFECTS].aggregate(status_pipeline).to_list(None)
-
-    repairs_cursor = (
-        db.db[COL_PROJECT_REPAIR_HISTORY]
-        .find({"project_id": project_id})
-        .sort("applied_at", -1)
-        .limit(20)
-    )
-    repairs = [doc async for doc in repairs_cursor]
-
-    enriched_repairs = []
-    for r in repairs:
-        defect = await db.db[COL_DEFECTS].find_one({"id": r["defect_id"]})
-        enriched_repairs.append(
-            {
-                **r,
-                "defect_category": defect["category"] if defect else None,
-                "defect_severity": defect["severity"] if defect else None,
-            }
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        gate_rows = await conn.fetch(
+            "SELECT * FROM quality_gates WHERE project_id = $1 ORDER BY gate_number",
+            project_id
         )
+        gates = [_row_to_dict(r) for r in gate_rows]
+
+        severity_rows = await conn.fetch(
+            """
+            SELECT severity, COUNT(*) as count
+            FROM defects WHERE project_id = $1 GROUP BY severity
+            """,
+            project_id
+        )
+        defect_counts = {r["severity"]: r["count"] for r in severity_rows}
+
+        status_rows = await conn.fetch(
+            """
+            SELECT status, COUNT(*) as count
+            FROM defects WHERE project_id = $1 GROUP BY status
+            """,
+            project_id
+        )
+        defect_statuses = {r["status"]: r["count"] for r in status_rows}
+
+        repair_rows = await conn.fetch(
+            """
+            SELECT prh.*, d.category as defect_category, d.severity as defect_severity
+            FROM project_repair_history prh
+            JOIN defects d ON prh.defect_id = d.id
+            WHERE prh.project_id = $1
+            ORDER BY prh.applied_at DESC LIMIT 20
+            """,
+            project_id
+        )
+        recent_repairs = [_row_to_dict(r) for r in repair_rows]
 
     return {
         "gates": gates,
-        "defect_counts": {r["_id"]: r["count"] for r in severity_rows},
-        "defect_statuses": {r["_id"]: r["count"] for r in status_rows},
-        "recent_repairs": enriched_repairs,
+        "defect_counts": defect_counts,
+        "defect_statuses": defect_statuses,
+        "recent_repairs": recent_repairs,
     }
 
 
 async def get_global_registry_stats() -> dict:
     """Get global repair registry statistics for dashboard."""
-    total_row = await db.db[COL_REPAIR_REGISTRY].count_documents({"is_global": True})
-
-    category_pipeline = [
-        {"$match": {"is_global": True}},
-        {"$group": {"_id": "$error_category", "count": {"$sum": 1}}},
-    ]
-    cat_rows = await db.db[COL_REPAIR_REGISTRY].aggregate(category_pipeline).to_list(None)
-
-    verified_count = await db.db[COL_REPAIR_REGISTRY].count_documents(
-        {"is_global": True, "confidence": {"$gt": 0.7}, "success_count": {"$gt": 0}}
-    )
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM repair_registry WHERE is_global = TRUE"
+        )
+        cat_rows = await conn.fetch(
+            """
+            SELECT error_category, COUNT(*) as count
+            FROM repair_registry WHERE is_global = TRUE
+            GROUP BY error_category
+            """
+        )
+        verified_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM repair_registry
+            WHERE is_global = TRUE AND confidence > 0.7 AND success_count > 0
+            """
+        )
 
     return {
-        "total_patterns": total_row,
-        "by_category": {r["_id"]: r["count"] for r in cat_rows},
+        "total_patterns": total,
+        "by_category": {r["error_category"]: r["count"] for r in cat_rows},
         "verified_patterns": verified_count,
     }

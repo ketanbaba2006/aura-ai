@@ -157,6 +157,8 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──
     await search_manager.shutdown()
     await db.disconnect()
+    from app.quality.database import close_pg_pool
+    await close_pg_pool()
     logger.info("AURA AI shut down")
 
 

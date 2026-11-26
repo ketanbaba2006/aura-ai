@@ -57,7 +57,7 @@ export function ChatWindow({
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const threshold = 100;
+    const threshold = 120;
     isNearBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
   }, []);
@@ -65,18 +65,20 @@ export function ChatWindow({
   useEffect(() => {
     const el = containerRef.current;
     if (el) {
-      el.addEventListener("scroll", handleScroll);
+      el.addEventListener("scroll", handleScroll, { passive: true });
       return () => el.removeEventListener("scroll", handleScroll);
     }
   }, [handleScroll]);
 
   const messagesCount = messages.length;
   useEffect(() => {
-    scrollToBottom("auto");
+    // When a new message is added, always auto-scroll to bottom
+    scrollToBottom("smooth");
     isNearBottomRef.current = true;
   }, [messagesCount, scrollToBottom]);
 
   useEffect(() => {
+    // While streaming tokens, only scroll if the user is already near bottom
     if (isNearBottomRef.current) {
       scrollToBottom("auto");
     }

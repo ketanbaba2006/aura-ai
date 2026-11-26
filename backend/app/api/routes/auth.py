@@ -27,6 +27,12 @@ from app.core.auth_security import (
     enforce_rate_limiting,
     CSRF_SECRET_TOKEN
 )
+from app.core.email import generate_verification_code, send_verification_email
+from app.quality.database import (
+    create_verification_code,
+    verify_code,
+    invalidate_verification_codes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,36 +105,45 @@ async def signup(body: SignupRequest, request: Request):
     # First user rule: if no users in db, make OWNER, else USER
     count_row = {"count": await db.db.users.count_documents({})}
     role = "OWNER" if count_row and count_row["count"] == 0 else "USER"
-    
+
     user_id = str(uuid.uuid4())
     avatar_url = f"https://api.dicebear.com/7.x/bottts/svg?seed={body.name}"
 
     try:
-        await db.db.users.insert_one({"id": user_id, "name": body.name, "email": email, "password_hash": pw_hash, "avatar_url": avatar_url, "provider": "local", "role": role, "is_active": True})
+        await db.db.users.insert_one({
+            "id": user_id,
+            "name": body.name,
+            "email": email,
+            "password_hash": pw_hash,
+            "avatar_url": avatar_url,
+            "provider": "local",
+            "role": role,
+            "is_active": False,  # Inactive until email verified
+        })
     except Exception as e:
         logger.error(f"Failed to create user during signup: {e}")
         raise HTTPException(status_code=500, detail="Database write failed")
 
-    # Generate verification token (mock flow: output to console)
-    verification_token = str(uuid.uuid4())
-    expires = datetime.utcnow() + timedelta(hours=24)
-    await db.db.auth_tokens.insert_one({"id": str(uuid.uuid4()), "user_id": user_id, "token": verification_token, "token_type": "email_verification", "expires_at": expires.isoformat()})
+    # Generate 6-digit verification code and store in PostgreSQL
+    code = generate_verification_code(6)
+    await create_verification_code(email, code, code_type="email_verification", ttl_minutes=10)
 
-    logger.info(f"=== EMAIL VERIFICATION TOKEN FOR {email} ===")
-    logger.info(f"Verification link: http://localhost:3000/verify-email?token={verification_token}")
-    logger.info("============================================")
+    # Send the code via email (falls back to console log if no SMTP configured)
+    email_sent = send_verification_email(email, code, code_type="email_verification")
 
     return {
         "success": True,
-        "message": "User registered successfully.",
+        "message": "User registered successfully. A verification code has been sent to your email.",
         "user": {
             "id": user_id,
             "name": body.name,
             "email": email,
             "role": role,
-            "avatar_url": avatar_url
+            "avatar_url": avatar_url,
+            "is_active": False,
         },
-        "verification_token": verification_token  # Returned for local validation convenience
+        "verification_code": code,  # Returned for local/dev convenience; remove in production
+        "email_sent": email_sent,
     }
 
 @router.post("/login")
@@ -331,6 +346,73 @@ async def verify_email(token: str = Query(...)):
     await db.db.auth_tokens.delete_one({"token": token})
 
     return {"success": True, "message": "Account verified successfully. You can now log in."}
+
+
+# ─── Email Verification Code ─────────────────────────────────────
+
+class VerifyCodeRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class ResendCodeRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/verify-code")
+async def verify_code_endpoint(body: VerifyCodeRequest):
+    """Verifies the 6-digit email verification code sent on signup."""
+    email = body.email.strip().lower()
+    code = body.code.strip()
+
+    user = await db.db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email")
+
+    if user.get("is_active"):
+        return {"success": True, "message": "Account is already verified."}
+
+    valid = await verify_code(email, code, code_type="email_verification")
+    if not valid:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+
+    await db.db.users.update_one({"id": user["id"]}, {"$set": {"is_active": True}})
+    await invalidate_verification_codes(email, "email_verification")
+
+    return {"success": True, "message": "Email verified successfully. You can now log in."}
+
+
+@router.post("/resend-code")
+async def resend_code_endpoint(body: ResendCodeRequest, request: Request):
+    """Resends a verification code to the user's email."""
+    enforce_rate_limiting(request)
+    email = body.email.strip().lower()
+
+    user = await db.db.users.find_one({"email": email})
+    if not user:
+        # Avoid user enumeration
+        return {"success": True, "message": "If this email is registered, a new code has been sent."}
+
+    if user.get("is_active"):
+        return {"success": True, "message": "Account is already verified."}
+
+    # Invalidate any existing unused codes
+    await invalidate_verification_codes(email, "email_verification")
+
+    # Generate and store a new code
+    code = generate_verification_code(6)
+    await create_verification_code(email, code, code_type="email_verification", ttl_minutes=10)
+
+    # Send via email
+    email_sent = send_verification_email(email, code, code_type="email_verification")
+
+    return {
+        "success": True,
+        "message": "A new verification code has been sent to your email.",
+        "verification_code": code,
+        "email_sent": email_sent,
+    }
+
 
 # ─── Session Management ───────────────────────────────────
 
