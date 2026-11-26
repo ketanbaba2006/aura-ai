@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     RESEARCH_SOURCES_LIMIT: int = 8
     RESEARCH_TIMEOUT: int = 300
 
-    # Database (PostgreSQL)
+    # Database (PostgreSQL & SQLite fallback)
+    DATABASE_PATH: str = "./data/aura.db"
     DATABASE_URL: str | None = None
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
