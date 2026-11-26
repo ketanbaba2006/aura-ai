@@ -215,6 +215,8 @@ app.include_router(monitoring.router, prefix="/api/v1", dependencies=[require_ro
 
 
 # ── Health check ──
+@app.get("/health", tags=["System"])
+@app.get("/healthz", tags=["System"])
 @app.get("/api/v1/health", tags=["System"])
 async def health_check():
     """Health check endpoint with dynamic LLM provider telemetry."""
