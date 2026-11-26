@@ -1,0 +1,41 @@
+# Backend
+backend/venv/
+backend/aura.db
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.research_cache/
+backend/.pytest_cache/
+backend/aura_db.mv.db
+backend/aura_db.trace.db
+backend/execution_sandbox/
+backend/user_files/
+*.pyc
+__pycache__/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Caches / data
+.pytest_cache/
+.research_cache/
+execution_sandbox/
+user_files/
+aura.db

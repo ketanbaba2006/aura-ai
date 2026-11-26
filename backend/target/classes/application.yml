@@ -1,0 +1,30 @@
+server:
+  port: 8000
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: aura-backend
+  datasource:
+    url: jdbc:h2:mem:auradb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: 
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+
+aura:
+  jwt:
+    secret: "aurasecretkey12345678901234567890123456789012"
+    refresh-secret: "71e87924e6ab471b2e7dede4fc8a5ca77e9cba6ce85fbea5d7c87278f4b4ce62"
+    expiration-ms: 86400000 # 24 hours
+  default-model: "aura-reasoning-v1"
