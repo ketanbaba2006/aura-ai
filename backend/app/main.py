@@ -98,8 +98,11 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize user workspace directories: {e}")
 
     # Connect database
-    await db.connect()
-    logger.info("Database connected")
+    try:
+        await db.connect()
+        logger.info("Database connected")
+    except Exception as e:
+        logger.warning(f"MongoDB connection skipped or unavailable: {e}. Running with PostgreSQL / Neon fallback.")
 
     # Initialize local vector store
     try:
