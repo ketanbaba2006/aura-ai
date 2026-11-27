@@ -186,12 +186,15 @@ app.add_middleware(
 from app.core.auth_security import get_current_user, require_role
 from app.api.routes import chat, conversations, memory, tools, search, knowledge, logs, settings as settings_route, files, monitoring, auth, projects, research, execution, notebook, identity, quality  # noqa: E402
 
-# Unprotected Authentication Router
+# Unprotected Authentication Router (supports both /api/v1/auth and /api/auth)
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api")
 
-# Protected Workspace / Assistant Routers
+# Protected Workspace / Assistant Routers (supports both /api/v1 and /api)
 app.include_router(chat.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(chat.router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(conversations.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(conversations.router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(memory.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(tools.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(search.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
