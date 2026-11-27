@@ -68,6 +68,8 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
 
                 event_data = {
                     "content": data,
+                    "text": data,
+                    "delta": data,
                 }
                 if metadata:
                     event_data["metadata"] = metadata
