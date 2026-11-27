@@ -176,11 +176,29 @@ app = FastAPI(
 # ── CORS ──
 app.add_middleware(
     CORSMiddleware,
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*auraainet\.xyz|http://localhost:.*|http://127\.0\.0\.1:.*",
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    origin = request.headers.get("origin", "*")
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "detail": str(exc) or "Internal server error"},
+        headers={
+            "Access-Control-Allow-Origin": origin if origin != "null" else "*",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 # ── Mount routers ──
 from app.core.auth_security import get_current_user, require_role
