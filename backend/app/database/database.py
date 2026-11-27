@@ -4,6 +4,7 @@ MongoDB database setup and operations using motor.
 """
 
 import os
+import uuid
 import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -22,12 +23,16 @@ class Database:
 
     async def connect(self) -> None:
         """Initialize database connection."""
+        if not os.environ.get("MONGODB_URI"):
+            logger.info("MONGODB_URI not provided; using built-in database store.")
+            self._db = None
+            return
+
         try:
-            self._client = AsyncIOMotorClient(self.uri)
-            self._db = self._client[self.db_name]
-            
+            self._client = AsyncIOMotorClient(self.uri, serverSelectionTimeoutMS=2000)
             # Verify connection
             await self._client.admin.command('ping')
+            self._db = self._client[self.db_name]
             logger.info(f"MongoDB connected: {self.uri} (database: {self.db_name})")
             
             # Setup initial collections/indexes if necessary
@@ -59,8 +64,8 @@ class Database:
                 )
             
         except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: {e}")
-            raise
+            logger.warning(f"Failed to connect to MongoDB ({e}); falling back to built-in store.")
+            self._db = None
 
     async def _setup_indexes(self):
         if self._db is None: return
@@ -89,26 +94,80 @@ class Database:
             return self._db
         return _fallback_store
 
+import json
+import sqlite3
+
 class _FallbackCollection:
-    def __init__(self, name: str):
+    def __init__(self, name: str, db_path: str = "./data/aura_fallback.db"):
         self.name = name
-        self._data = {}
+        self.db_path = db_path
+        self._init_sqlite()
+
+    def _init_sqlite(self):
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.name} (
+                        id TEXT PRIMARY KEY,
+                        data JSON NOT NULL
+                    )
+                """)
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Fallback SQLite init failed for {self.name}: {e}")
+
+    def _get_all(self) -> dict:
+        result = {}
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT id, data FROM {self.name}")
+                for doc_id, data_str in cursor.fetchall():
+                    try:
+                        result[doc_id] = json.loads(data_str)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug(f"Fallback SQLite read error: {e}")
+        return result
+
+    def _save_one(self, doc_id: str, doc: dict):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {self.name} (id, data) VALUES (?, ?)",
+                    (doc_id, json.dumps(doc))
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Fallback SQLite write error: {e}")
+
+    def _delete(self, doc_id: str):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(f"DELETE FROM {self.name} WHERE id = ?", (doc_id,))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Fallback SQLite delete error: {e}")
 
     async def create_index(self, *args, **kwargs):
         return None
 
     async def count_documents(self, filter_query: dict = None) -> int:
+        data = self._get_all()
         if not filter_query:
-            return len(self._data)
+            return len(data)
         count = 0
-        for doc in self._data.values():
+        for doc in data.values():
             if all(doc.get(k) == v for k, v in filter_query.items() if not k.startswith("$")):
                 count += 1
         return count
 
     async def find_one(self, filter_query: dict = None) -> dict | None:
+        data = self._get_all()
         if not filter_query:
-            return next(iter(self._data.values()), None)
+            return next(iter(data.values()), None)
         
         # Handle $or queries
         if "$or" in filter_query:
@@ -118,7 +177,7 @@ class _FallbackCollection:
                     return res
             return None
 
-        for doc in self._data.values():
+        for doc in data.values():
             match = True
             for k, v in filter_query.items():
                 if k.startswith("$"):
@@ -131,8 +190,10 @@ class _FallbackCollection:
         return None
 
     async def insert_one(self, document: dict):
-        doc_id = document.get("id") or str(len(self._data) + 1)
-        self._data[doc_id] = dict(document)
+        doc_id = document.get("id") or str(uuid.uuid4() if 'uuid' in globals() else len(self._get_all()) + 1)
+        doc = dict(document)
+        doc["id"] = doc_id
+        self._save_one(doc_id, doc)
         return type("InsertResult", (), {"inserted_id": doc_id})()
 
     async def update_one(self, filter_query: dict, update_query: dict, upsert: bool = False):
@@ -140,7 +201,8 @@ class _FallbackCollection:
         if doc:
             doc_id = doc.get("id")
             if "$set" in update_query:
-                self._data[doc_id].update(update_query["$set"])
+                doc.update(update_query["$set"])
+            self._save_one(doc_id, doc)
             return type("UpdateResult", (), {"modified_count": 1, "matched_count": 1})()
         elif upsert:
             new_doc = {}
@@ -158,12 +220,21 @@ class _FallbackCollection:
     async def delete_one(self, filter_query: dict):
         doc = await self.find_one(filter_query)
         if doc and "id" in doc:
-            self._data.pop(doc["id"], None)
+            self._delete(doc["id"])
             return type("DeleteResult", (), {"deleted_count": 1})()
         return type("DeleteResult", (), {"deleted_count": 0})()
 
+    async def delete_many(self, filter_query: dict):
+        data = self._get_all()
+        deleted = 0
+        for doc in data.values():
+            if all(doc.get(k) == v for k, v in filter_query.items() if not k.startswith("$")):
+                self._delete(doc["id"])
+                deleted += 1
+        return type("DeleteResult", (), {"deleted_count": deleted})()
+
     def find(self, filter_query: dict = None):
-        items = list(self._data.values())
+        items = list(self._get_all().values())
         if filter_query:
             filtered = []
             for doc in items:
