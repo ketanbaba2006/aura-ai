@@ -9,7 +9,7 @@ PostgreSQL tables — no MongoDB.
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import asyncpg
@@ -272,7 +272,7 @@ async def create_verification_code(
 ) -> str:
     """Store a verification code for email verification / password reset."""
     code_id = str(uuid.uuid4())
-    expires_at = datetime.utcnow() + __import__("timedelta", fromlist=["timedelta"]).timedelta(minutes=ttl_minutes)
+    expires_at = datetime.utcnow() + timedelta(minutes=ttl_minutes)
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         await conn.execute(

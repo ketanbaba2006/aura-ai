@@ -96,12 +96,12 @@ If you didn't request this, you can safely ignore this email.
     msg.attach(MIMEText(html_body, "html"))
 
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as server:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=5) as server:
             server.starttls()
             server.login(smtp_user, smtp_password)
             server.send_message(msg)
         logger.info(f"Verification email sent to {to_email} (type={code_type})")
         return True
     except Exception as e:
-        logger.error(f"Failed to send verification email to {to_email}: {e}")
+        logger.warning(f"SMTP sending skipped/failed for {to_email}: {e}")
         return False
