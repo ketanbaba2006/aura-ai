@@ -3,6 +3,7 @@ AURA AI Configuration
 Central settings for the application.
 """
 
+import os
 from pydantic_settings import BaseSettings
 from pathlib import Path
 

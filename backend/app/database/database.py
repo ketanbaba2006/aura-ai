@@ -143,6 +143,79 @@ class _FallbackCollection:
         except Exception as e:
             logger.warning(f"Fallback SQLite write error: {e}")
 
+    async def _pg_sync_save(self, doc_id: str, doc: dict):
+        """Asynchronously sync user to Neon PostgreSQL if connection is available."""
+        if self.name != "users":
+            return
+        try:
+            from app.quality.database import get_pg_pool
+            pool = await get_pg_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE,
+                        name TEXT,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT,
+                        role TEXT NOT NULL DEFAULT 'USER',
+                        avatar_url TEXT,
+                        provider TEXT NOT NULL DEFAULT 'local',
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        last_login TIMESTAMP
+                    )
+                """)
+                await conn.execute("""
+                    INSERT INTO users (id, username, name, email, password_hash, role, avatar_url, provider, is_active)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (email) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        name = EXCLUDED.name,
+                        password_hash = EXCLUDED.password_hash,
+                        role = EXCLUDED.role,
+                        avatar_url = EXCLUDED.avatar_url,
+                        updated_at = NOW()
+                """, doc.get("id", doc_id), doc.get("username"), doc.get("name"), doc.get("email"), doc.get("password_hash"), doc.get("role", "USER"), doc.get("avatar_url"), doc.get("provider", "local"), doc.get("is_active", True))
+        except Exception as e:
+            logger.debug(f"Neon PG user sync skipped: {e}")
+
+    async def _pg_sync_load_user(self, filter_query: dict) -> dict | None:
+        """Asynchronously load user from Neon PostgreSQL if missing in local container."""
+        if self.name != "users":
+            return None
+        try:
+            from app.quality.database import get_pg_pool
+            pool = await get_pg_pool()
+            async with pool.acquire() as conn:
+                email = filter_query.get("email")
+                username = filter_query.get("username")
+                user_id = filter_query.get("id")
+                row = None
+                if email:
+                    row = await conn.fetchrow("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", email)
+                elif username:
+                    row = await conn.fetchrow("SELECT * FROM users WHERE LOWER(username) = LOWER($1)", username)
+                elif user_id:
+                    row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+                elif "$or" in filter_query:
+                    for sub in filter_query["$or"]:
+                        sub_row = await self._pg_sync_load_user(sub)
+                        if sub_row:
+                            return sub_row
+
+                if row:
+                    user_data = dict(row)
+                    user_data["created_at"] = str(user_data.get("created_at") or "")
+                    user_data["updated_at"] = str(user_data.get("updated_at") or "")
+                    user_data["last_login"] = str(user_data.get("last_login") or "")
+                    self._save_one(user_data["id"], user_data)
+                    return user_data
+        except Exception as e:
+            logger.debug(f"Neon PG user read skipped: {e}")
+        return None
+
     def _delete(self, doc_id: str):
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -187,6 +260,12 @@ class _FallbackCollection:
                     break
             if match:
                 return dict(doc)
+
+        # Fallback to Neon PostgreSQL query if user not found in local cache
+        pg_user = await self._pg_sync_load_user(filter_query)
+        if pg_user:
+            return pg_user
+
         return None
 
     async def insert_one(self, document: dict):
@@ -194,6 +273,7 @@ class _FallbackCollection:
         doc = dict(document)
         doc["id"] = doc_id
         self._save_one(doc_id, doc)
+        await self._pg_sync_save(doc_id, doc)
         return type("InsertResult", (), {"inserted_id": doc_id})()
 
     async def update_one(self, filter_query: dict, update_query: dict, upsert: bool = False):

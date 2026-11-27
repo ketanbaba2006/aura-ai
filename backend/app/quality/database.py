@@ -47,6 +47,33 @@ async def close_pg_pool() -> None:
 # ─── Table Definitions ──────────────────────────────────────────────────
 
 QUALITY_TABLES = {
+    "users": """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE,
+            name TEXT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT,
+            role TEXT NOT NULL DEFAULT 'USER',
+            avatar_url TEXT,
+            provider TEXT NOT NULL DEFAULT 'local',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_login TIMESTAMP
+        )
+    """,
+    "user_sessions": """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token_jti TEXT NOT NULL,
+            device_info TEXT,
+            ip_address TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_active TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """,
     "quality_projects": """
         CREATE TABLE IF NOT EXISTS quality_projects (
             id TEXT PRIMARY KEY,
