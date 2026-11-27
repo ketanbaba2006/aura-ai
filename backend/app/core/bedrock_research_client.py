@@ -144,8 +144,22 @@ class ResearchLLMClient:
         timeout = cfg["timeout"]
 
         if not api_key or api_key == "INSECURE_DEFAULT_RESEARCH_KEY":
-            yield "⚠️ Deep Research API key is not configured. Please set your Research API Key in Settings → Deep Research."
-            return
+            # Seamless free-tier fallback: route through main LLM client (Groq / OpenRouter / Gemini)
+            logger.info("ResearchLLMClient: Research-specific API key unconfigured, falling back seamlessly to default active LLM engine.")
+            try:
+                from app.core.llm_client import llm_client
+                async for chunk, _meta in llm_client.stream_chat(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    category="research",
+                ):
+                    if chunk:
+                        yield chunk
+                return
+            except Exception as fb_err:
+                logger.error(f"ResearchLLMClient fallback stream failed: {fb_err}", exc_info=True)
+                yield f"\n\n⚠️ Autonomous research fallback error: {str(fb_err)}"
+                return
 
         self.stats["requests"] += 1
 
