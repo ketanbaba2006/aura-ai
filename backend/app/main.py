@@ -201,7 +201,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # ── Mount routers ──
 from app.core.auth_security import get_current_user, require_role
-from app.api.routes import chat, conversations, memory, tools, search, knowledge, logs, settings as settings_route, files, monitoring, auth, projects, research, execution, notebook, identity, quality, models as models_route, image as image_route  # noqa: E402
+from app.api.routes import chat, conversations, memory, tools, search, knowledge, logs, settings as settings_route, files, monitoring, auth, projects, research, execution, notebook, identity, quality, models as models_route, image as image_route, workspace_studio  # noqa: E402
 
 # Unprotected Authentication Router (supports both /api/v1/auth and /api/auth)
 app.include_router(auth.router, prefix="/api/v1")
@@ -212,6 +212,10 @@ app.include_router(models_route.router, prefix="/api/v1")
 app.include_router(models_route.router, prefix="/api")
 app.include_router(image_route.router, prefix="/api/v1")
 app.include_router(image_route.router, prefix="/api")
+
+# Coding Studio & Workspace (accessible publicly or optionally authenticated with guest fallback)
+app.include_router(workspace_studio.router, prefix="/api/v1")
+app.include_router(workspace_studio.router, prefix="/api")
 
 # Protected Workspace / Assistant Routers (supports both /api/v1 and /api)
 app.include_router(chat.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
