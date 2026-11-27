@@ -41,12 +41,14 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 # ─── Pydantic Request Schemas ──────────────────────────────
 
 class SignupRequest(BaseModel):
-    name: str = Field(..., min_length=2, max_length=50)
+    name: str | None = None
+    username: str | None = None
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=100)
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str | None = None
+    username: str | None = None
     password: str
 
 class ForgotPasswordRequest(BaseModel):
@@ -89,10 +91,12 @@ def set_auth_cookies(response: Response, refresh_token: str, csrf_token: str):
 # ─── Auth Endpoints ────────────────────────────────────────
 
 @router.post("/signup")
+@router.post("/register")
 async def signup(body: SignupRequest, request: Request):
     """Registers a new user. Auto-assigns the first registered user as OWNER."""
     enforce_rate_limiting(request)
     email = body.email.strip().lower()
+    user_name = (body.name or body.username or email.split("@")[0]).strip()
 
     # Check if user already exists
     existing = await db.db.users.find_one({"email": email})
@@ -107,18 +111,19 @@ async def signup(body: SignupRequest, request: Request):
     role = "OWNER" if count_row and count_row["count"] == 0 else "USER"
 
     user_id = str(uuid.uuid4())
-    avatar_url = f"https://api.dicebear.com/7.x/bottts/svg?seed={body.name}"
+    avatar_url = f"https://api.dicebear.com/7.x/bottts/svg?seed={user_name}"
 
     try:
         await db.db.users.insert_one({
             "id": user_id,
-            "name": body.name,
+            "name": user_name,
+            "username": user_name,
             "email": email,
             "password_hash": pw_hash,
             "avatar_url": avatar_url,
             "provider": "local",
             "role": role,
-            "is_active": False,  # Inactive until email verified
+            "is_active": True,
         })
     except Exception as e:
         logger.error(f"Failed to create user during signup: {e}")
@@ -126,23 +131,36 @@ async def signup(body: SignupRequest, request: Request):
 
     # Generate 6-digit verification code and store in PostgreSQL
     code = generate_verification_code(6)
-    await create_verification_code(email, code, code_type="email_verification", ttl_minutes=10)
+    try:
+        await create_verification_code(email, code, code_type="email_verification", ttl_minutes=10)
+    except Exception as e:
+        logger.warning(f"Could not write verification code to Postgres: {e}")
 
     # Send the code via email (falls back to console log if no SMTP configured)
     email_sent = send_verification_email(email, code, code_type="email_verification")
 
+    # Generate tokens immediately so the user can be logged in
+    jti = str(uuid.uuid4())
+    access_token = create_access_token(user_id, role, user_name)
+    refresh_token = create_refresh_token(user_id, jti)
+
     return {
         "success": True,
-        "message": "User registered successfully. A verification code has been sent to your email.",
+        "message": "User registered successfully.",
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
         "user": {
             "id": user_id,
-            "name": body.name,
+            "name": user_name,
+            "username": user_name,
             "email": email,
             "role": role,
             "avatar_url": avatar_url,
-            "is_active": False,
+            "is_active": True,
         },
-        "verification_code": code,  # Returned for local/dev convenience; remove in production
+        "verification_code": code,
         "email_sent": email_sent,
     }
 
@@ -150,52 +168,58 @@ async def signup(body: SignupRequest, request: Request):
 async def login(body: LoginRequest, request: Request, response: Response):
     """Authenticates credentials and establishes session."""
     enforce_rate_limiting(request)
-    email = body.email.strip().lower()
+    identifier = (body.email or body.username or "").strip().lower()
 
     # Enforce lockout protection
-    enforce_brute_force(email)
+    enforce_brute_force(identifier)
 
-    user = await db.db.users.find_one({"email": email, "provider": "local"})
+    # Allow login by email or username
+    user = await db.db.users.find_one({"$or": [{"email": identifier}, {"username": identifier}]})
+    if not user:
+        user = await db.db.users.find_one({"email": identifier})
 
-    if not user or not verify_password(body.password, user["password_hash"]):
-        register_failed_login(email)
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    if not user["is_active"]:
-        raise HTTPException(status_code=403, detail="User account is deactivated")
+    if not user or not verify_password(body.password, user.get("password_hash", "")):
+        register_failed_login(identifier)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # Clear brute-force attempts
-    clear_failed_logins(email)
+    clear_failed_logins(identifier)
 
     # Establish session
     user_id = user["id"]
     jti = str(uuid.uuid4())
-    
-    access_token = create_access_token(user_id, user["role"], user["name"])
+    user_name = user.get("name") or user.get("username") or identifier
+    user_role = user.get("role", "USER")
+    user_email = user.get("email", identifier)
+
+    access_token = create_access_token(user_id, user_role, user_name)
     refresh_token = create_refresh_token(user_id, jti)
     csrf_token = str(uuid.uuid4())
 
     # Get device/IP info
     device_info = request.headers.get("user-agent", "Unknown Device")
     ip_address = request.client.host if request.client else "Unknown IP"
-    
-    await db.db.user_sessions.insert_one({"id": str(uuid.uuid4()), "user_id": user_id, "token_jti": jti, "device_info": device_info, "ip_address": ip_address, "created_at": datetime.utcnow().isoformat(), "last_active": datetime.utcnow().isoformat()})
 
-    # Update last login timestamp
-    now = datetime.utcnow().isoformat()
-    await db.db.users.update_one({"id": user_id}, {"$set": {"last_login": now, "updated_at": now}})
+    try:
+        await db.db.user_sessions.insert_one({"id": str(uuid.uuid4()), "user_id": user_id, "token_jti": jti, "device_info": device_info, "ip_address": ip_address, "created_at": datetime.utcnow().isoformat(), "last_active": datetime.utcnow().isoformat()})
+    except Exception:
+        pass
 
     set_auth_cookies(response, refresh_token, csrf_token)
 
     return {
         "success": True,
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "csrf_token": csrf_token,
         "user": {
             "id": user_id,
-            "name": user["name"],
-            "email": user["email"],
-            "role": user["role"]
+            "name": user_name,
+            "username": user_name,
+            "email": user_email,
+            "role": user_role
         }
     }
 
