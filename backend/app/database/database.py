@@ -255,7 +255,13 @@ class _FallbackCollection:
             for k, v in filter_query.items():
                 if k.startswith("$"):
                     continue
-                if doc.get(k) != v:
+                doc_val = doc.get(k)
+                # Case-insensitive comparison for strings like email/username
+                if isinstance(v, str) and isinstance(doc_val, str):
+                    if doc_val.lower() != v.lower():
+                        match = False
+                        break
+                elif doc_val != v:
                     match = False
                     break
             if match:
