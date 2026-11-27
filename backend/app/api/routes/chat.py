@@ -66,11 +66,24 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
                 
                 await stream_registry.wait_if_paused(conversation_id)
 
-                event_data = {
-                    "content": data,
-                    "text": data,
-                    "delta": data,
-                }
+                # Skip sending repetitive "Waiting" pending steps to prevent SSE flood
+                if event_type == ChatEventType.THINKING and data == "Waiting":
+                    continue
+
+                if event_type == ChatEventType.TOKEN:
+                    event_data = {
+                        "content": data,
+                        "text": data,
+                        "delta": data,
+                    }
+                else:
+                    # Non-token events (thinking, status, planner, tool, etc.)
+                    # Do not populate 'text' or 'delta' to prevent legacy clients from misinterpreting as answer tokens
+                    event_data = {
+                        "content": data,
+                        "status": data,
+                    }
+
                 if metadata:
                     event_data["metadata"] = metadata
 
