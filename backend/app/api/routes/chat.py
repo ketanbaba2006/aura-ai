@@ -33,7 +33,7 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
     - error: Error occurred
     """
     # Get or create conversation
-    conversation_id = request.conversation_id
+    conversation_id = request.conversation_id or request.conversationId
     if not conversation_id:
         conversation_id = await memory_engine.create_conversation(user_id=current_user["id"])
 
@@ -47,7 +47,13 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
             }))
 
             # Pure Chatbot Routing
-            responder = router_engine.route_and_respond(request.message, conversation_id, request.timezone)
+            responder = router_engine.route_and_respond(
+                request.message,
+                conversation_id,
+                request.timezone,
+                preferred_provider=request.provider,
+                preferred_model=request.model
+            )
 
             async for event_type, data, metadata in responder:
                 # Check for cancellation or pause in the registry

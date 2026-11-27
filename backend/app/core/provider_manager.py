@@ -292,7 +292,9 @@ class ProviderManager:
         self,
         messages: list[dict],
         category: str = "chat",
-        system_prompt: str | None = None
+        system_prompt: str | None = None,
+        preferred_provider: str | None = None,
+        preferred_model: str | None = None
     ) -> AsyncGenerator[tuple[str, dict | None], None]:
         """Streams chat completion with automatic failover, retries, and strict cloud-only error propagation.
         
@@ -322,13 +324,26 @@ class ProviderManager:
         last_model = None
         fallback_from = None
 
+        # Determine queue order: Preferred provider -> Groq (ultra fast free) -> OpenRouter -> Gemini
+        queue = list(PROVIDERS_PRIORITY)
+        if "groq" in queue:
+            queue.remove("groq")
+            queue.insert(0, "groq")
+
+        if preferred_provider and preferred_provider.lower() in queue:
+            p_clean = preferred_provider.lower()
+            queue.remove(p_clean)
+            queue.insert(0, p_clean)
+
         # 2. Iterate priority cloud queue
-        for idx, provider_name in enumerate(PROVIDERS_PRIORITY):
-            circuit = self.circuits[provider_name]
+        for idx, provider_name in enumerate(queue):
+            circuit = self.circuits.get(provider_name)
+            if not circuit:
+                continue
 
             # A. Verify Key exists
-            config = PROVIDERS_CONFIG[provider_name]
-            if not config["key"] or config["key"] == f"INSECURE_DEFAULT_{provider_name.upper()}_KEY":
+            config = PROVIDERS_CONFIG.get(provider_name)
+            if not config or not config["key"] or config["key"] == f"INSECURE_DEFAULT_{provider_name.upper()}_KEY":
                 logger.warning(f"ProviderManager: Skipping {provider_name} (API key missing)")
                 failures[provider_name] = f"{provider_name.capitalize()} authentication failed"
                 continue
@@ -339,10 +354,20 @@ class ProviderManager:
                 failures[provider_name] = f"{provider_name.capitalize()} quota exceeded"
                 continue
 
-
             self.active_provider = provider_name
             last_provider = provider_name
-            model_name = config["models"][query_type]
+
+            # Model selection
+            if preferred_model and preferred_provider and preferred_provider.lower() == provider_name:
+                if provider_name == "groq" and ("qwen" in preferred_model.lower() or "3.8" in preferred_model.lower() or "oss" in preferred_model.lower()):
+                    model_name = "llama-3.3-70b-versatile"
+                else:
+                    clean_m = preferred_model.split("/")[-1] if "/" in preferred_model and provider_name == "groq" else preferred_model
+                    model_name = clean_m or config["models"][query_type]
+            else:
+                model_name = config["models"][query_type]
+
+            last_model = model_name
             last_model = model_name
 
             # D. Call provider with automatic retries + exponential backoff

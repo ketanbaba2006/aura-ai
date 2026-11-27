@@ -70,10 +70,18 @@ class ModelManager:
         self,
         messages: list[dict],
         category: str = "chat",
-        system_prompt: str | None = None
+        system_prompt: str | None = None,
+        preferred_provider: str | None = None,
+        preferred_model: str | None = None
     ) -> AsyncGenerator[tuple[str, dict | None], None]:
         """Streams chat completion with automatic failover mechanism."""
-        async for chunk, meta in provider_manager.stream_chat(messages, category, system_prompt):
+        async for chunk, meta in provider_manager.stream_chat(
+            messages,
+            category=category,
+            system_prompt=system_prompt,
+            preferred_provider=preferred_provider,
+            preferred_model=preferred_model
+        ):
             yield chunk, meta
 
     async def chat(

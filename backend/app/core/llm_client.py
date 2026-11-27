@@ -40,6 +40,8 @@ class LLMClient:
         model: str | None = None,
         system_prompt: str | None = None,
         category: str = "chat",
+        preferred_provider: str | None = None,
+        preferred_model: str | None = None,
     ) -> AsyncGenerator[tuple[str, dict | None], None]:
         """
         Stream chat completion via ModelManager.
@@ -48,6 +50,8 @@ class LLMClient:
             messages=messages,
             category=category,
             system_prompt=system_prompt,
+            preferred_provider=preferred_provider,
+            preferred_model=preferred_model,
         ):
             yield chunk, meta
 

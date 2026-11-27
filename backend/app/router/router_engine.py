@@ -402,7 +402,12 @@ class RouterEngine:
         return query.rstrip("?.! ").strip()
 
     async def route_and_respond(
-        self, message: str, conversation_id: str, timezone: str | None = None
+        self,
+        message: str,
+        conversation_id: str,
+        timezone: str | None = None,
+        preferred_provider: str | None = None,
+        preferred_model: str | None = None
     ) -> AsyncGenerator[tuple[ChatEventType, str, dict | None], None]:
         """Main routing execution generator."""
         # Check settings for web search mode
@@ -964,7 +969,11 @@ class RouterEngine:
         try:
             # Stream the chat completion in real-time
             async for token, meta in llm_client.stream_chat(
-                messages, system_prompt=system_prompt, category=category
+                messages,
+                system_prompt=system_prompt,
+                category=category,
+                preferred_provider=preferred_provider,
+                preferred_model=preferred_model
             ):
                 from app.router.stream_registry import stream_registry
                 # Check for model metadata at the end

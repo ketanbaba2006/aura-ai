@@ -236,9 +236,9 @@ app.include_router(notebook.router, prefix="/api/v1", dependencies=[Depends(get_
 app.include_router(identity.router, prefix="/api/v1")
 app.include_router(identity.router, prefix="/api")
 
-# Settings & Models Routers (accessible to authenticated users)
-app.include_router(settings_route.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
-app.include_router(settings_route.router, prefix="/api", dependencies=[Depends(get_current_user)])
+# Settings & Models Routers (accessible publicly or optionally authenticated)
+app.include_router(settings_route.router, prefix="/api/v1")
+app.include_router(settings_route.router, prefix="/api")
 
 # Protected OWNER-only System Routers
 app.include_router(logs.router, prefix="/api/v1", dependencies=[require_role(["OWNER"])])

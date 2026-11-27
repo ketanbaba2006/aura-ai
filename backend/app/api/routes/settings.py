@@ -15,15 +15,34 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 class SettingsUpdate(BaseModel):
     value: str
 
+DEFAULT_SETTINGS = {
+    "web_search_mode": "ask_first",
+    "theme": "dark",
+    "developer_mode": False,
+    "system_prompt": "You are AURA AI, an Autonomous Universal Reasoning Agent.",
+    "model": "qwen/qwen3.8-27b",
+    "provider": "groq",
+    "research_provider": "bedrock",
+    "research_model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+}
+
 @router.get("")
 async def get_settings():
-    """Get all settings."""
+    """Get all settings with built-in defaults."""
+    res = dict(DEFAULT_SETTINGS)
     try:
-        rows = await db.db.system_settings.find({}, {"key": 1, "value": 1}).to_list(length=None)
-        return {row["key"]: row["value"] for row in rows}
+        rows = await db.db.system_settings.find({}).to_list(length=None)
+        for row in rows:
+            if isinstance(row, dict) and "key" in row and "value" in row:
+                res[row["key"]] = row["value"]
     except Exception as e:
-        logger.error(f"Failed to fetch settings: {e}")
-        raise HTTPException(status_code=500, detail="Database query failed")
+        logger.warning(f"Could not load custom system_settings from DB: {e}; using defaults.")
+    return {
+        "settings": res,
+        "userId": "default",
+        "username": "User",
+        **res
+    }
 
 @router.get("/{key}")
 async def get_setting(key: str):
