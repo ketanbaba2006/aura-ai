@@ -107,9 +107,9 @@ class ProjectManager:
     async def get_active_project(self, conversation_id: str) -> dict | None:
         """Get the active project linked to the specified conversation."""
         row = await db.db.conversations.find_one({"id": conversation_id}, {"active_project_id": 1})
-        if not row or not row["active_project_id"]:
+        if not row or not row.get("active_project_id"):
             return None
-        return await self.get_project(row["active_project_id"])
+        return await self.get_project(row.get("active_project_id"))
 
     async def set_active_project(self, conversation_id: str, project_id: str) -> None:
         """Associate a project as the active target for a conversation session."""

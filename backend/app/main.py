@@ -154,6 +154,30 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Deep Research Provider: NOT CONFIGURED (Set AURA_RESEARCH_API_KEY in .env)")
 
+    # ── Auto-seed Admin Aura AI Account ──
+    try:
+        from app.core.auth_security import hash_password
+        admin_pw_hash = hash_password("admin@auraainet.xyz")
+        admin_user_data = {
+            "id": "aura-admin-system-id",
+            "name": "Admin Aura AI",
+            "username": "admin",
+            "email": "admin@auraainet.xyz",
+            "password_hash": admin_pw_hash,
+            "role": "OWNER",
+            "avatar_url": "https://api.dicebear.com/7.x/bottts/svg?seed=admin",
+            "provider": "local",
+            "is_active": True,
+        }
+        await db.db.users.update_one(
+            {"$or": [{"username": "admin"}, {"email": "admin@auraainet.xyz"}]},
+            {"$set": admin_user_data},
+            upsert=True
+        )
+        logger.info("Admin Aura AI account verified and seeded successfully (role: OWNER)")
+    except Exception as e:
+        logger.warning(f"Admin seeding error (non-fatal): {e}")
+
     logger.info("AURA AI ready")
 
     yield
