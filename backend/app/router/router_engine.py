@@ -823,7 +823,7 @@ class RouterEngine:
         # Step 5: Provider Selection
         yield (ChatEventType.THINKING, "Selecting fastest AI provider", {"step": "Provider Selection", "status": "running"})
         from app.core.model_manager import model_manager
-        provider_name = model_manager.active_provider
+        provider_name = preferred_provider or model_manager.active_provider
         
         # Get active provider's current latency
         latencies = model_manager.stats["latencies"].get(provider_name, [])

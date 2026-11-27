@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
 
     # Cloud Providers
-    GROQ_API_KEY: str = "INSECURE_DEFAULT_GROQ_KEY"
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY") or os.getenv("AURA_GROQ_API_KEY") or "INSECURE_DEFAULT_GROQ_KEY"
     GEMINI_API_KEY: str = "INSECURE_DEFAULT_GEMINI_KEY"
     OPENROUTER_API_KEY: str = "INSECURE_DEFAULT_OPENROUTER_KEY"
 

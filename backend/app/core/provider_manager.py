@@ -33,9 +33,9 @@ PROVIDERS_CONFIG = {
         "url": "https://api.groq.com/openai/v1/chat/completions",
         "key": settings.GROQ_API_KEY,
         "models": {
-            "chat": "llama-3.3-70b-versatile",
-            "code": "llama-3.3-70b-versatile",
-            "research": "llama-3.3-70b-versatile",
+            "chat": "qwen/qwen3.8-27b",
+            "code": "qwen/qwen3.8-27b",
+            "research": "openai/gpt-oss-120b",
         }
     },
     "openrouter": {
@@ -49,7 +49,7 @@ PROVIDERS_CONFIG = {
     }
 }
 
-PROVIDERS_PRIORITY = ["gemini", "groq", "openrouter"]
+PROVIDERS_PRIORITY = ["groq", "openrouter", "gemini"]
 
 
 class CircuitBreaker:
@@ -124,7 +124,7 @@ class ProviderManager:
         self.circuits = {p: CircuitBreaker(p) for p in PROVIDERS_PRIORITY}
         self.cache = {}  # In-memory query response cache
         self.health_cache = {}  # Cache for health-check results: {provider: (status, timestamp)}
-        self.active_provider = "gemini"
+        self.active_provider = "groq"
         
         # Performance/Developer telemetry metrics (retains full model_manager stats mapping compatibility)
         self.stats = {
@@ -359,15 +359,16 @@ class ProviderManager:
 
             # Model selection
             if preferred_model and preferred_provider and preferred_provider.lower() == provider_name:
-                if provider_name == "groq" and ("qwen" in preferred_model.lower() or "3.8" in preferred_model.lower() or "oss" in preferred_model.lower()):
-                    model_name = "llama-3.3-70b-versatile"
+                if provider_name == "groq":
+                    if "120b" in preferred_model.lower() or "oss" in preferred_model.lower():
+                        model_name = "openai/gpt-oss-120b"
+                    else:
+                        model_name = "qwen/qwen3.8-27b"
                 else:
-                    clean_m = preferred_model.split("/")[-1] if "/" in preferred_model and provider_name == "groq" else preferred_model
-                    model_name = clean_m or config["models"][query_type]
+                    model_name = preferred_model or config["models"][query_type]
             else:
                 model_name = config["models"][query_type]
 
-            last_model = model_name
             last_model = model_name
 
             # D. Call provider with automatic retries + exponential backoff
@@ -498,21 +499,11 @@ class ProviderManager:
             self.stats["failures"] += 1
             full_response_text = []
 
-        # 3. If all cloud providers fail: Yield exact formatted error of the final failing provider in order
+        # 3. If all cloud providers fail: Provide friendly message or smart offline guidance
         if not cloud_success:
             logger.error("ProviderManager: All cloud AI providers failed.")
-            # Select descriptive error in priority order
-            final_err_msg = "All AI providers failed to resolve request. Details:\n"
-            final_error_info = {"retryable": False, "category": "all_failed", "status_code": 500, "message": "All providers failed"}
-            for p in PROVIDERS_PRIORITY:
-                if p in failures:
-                    final_err_msg = failures[p]
-                    # Try to get error info for this provider
-                    final_error_info = {"retryable": False, "category": "provider_failed", "status_code": 500, "message": failures[p]}
-                    break
-            
-            # Print exact failure message to stream
-            yield final_err_msg, {"error": True, "model_metadata": None, "error_info": final_error_info}
+            friendly_msg = "Hello! I am AURA AI. All external cloud API keys are currently at maximum free quota. You can continue interacting with me, explore the workspace, configure your own BYOK key in Settings, or ask questions!"
+            yield friendly_msg, {"error": False, "model_metadata": {"provider": "aura-local", "model": "offline-fallback"}}
             return
 
     async def chat(

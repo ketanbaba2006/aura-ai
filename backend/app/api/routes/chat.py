@@ -46,13 +46,16 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
                 "conversation_id": conversation_id,
             }))
 
+            preferred_provider = request.provider if request.provider and request.provider.lower() not in ("null", "none", "auto") else "groq"
+            preferred_model = request.model if request.model and request.model.lower() not in ("null", "none", "auto") else "qwen/qwen3.8-27b"
+
             # Pure Chatbot Routing
             responder = router_engine.route_and_respond(
                 request.message,
                 conversation_id,
                 request.timezone,
-                preferred_provider=request.provider,
-                preferred_model=request.model
+                preferred_provider=preferred_provider,
+                preferred_model=preferred_model
             )
 
             async for event_type, data, metadata in responder:
