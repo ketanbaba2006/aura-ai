@@ -170,16 +170,17 @@ class _FallbackCollection:
                 await conn.execute("""
                     INSERT INTO users (id, username, name, email, password_hash, role, avatar_url, provider, is_active)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    ON CONFLICT (email) DO UPDATE SET
-                        username = EXCLUDED.username,
-                        name = EXCLUDED.name,
-                        password_hash = EXCLUDED.password_hash,
-                        role = EXCLUDED.role,
-                        avatar_url = EXCLUDED.avatar_url,
+                    ON CONFLICT (id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        name = COALESCE(EXCLUDED.name, users.name),
+                        email = COALESCE(EXCLUDED.email, users.email),
+                        password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+                        role = COALESCE(EXCLUDED.role, users.role),
+                        avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
                         updated_at = NOW()
                 """, doc.get("id", doc_id), doc.get("username"), doc.get("name"), doc.get("email"), doc.get("password_hash"), doc.get("role", "USER"), doc.get("avatar_url"), doc.get("provider", "local"), doc.get("is_active", True))
         except Exception as e:
-            logger.debug(f"Neon PG user sync skipped: {e}")
+            logger.warning(f"Neon PG user sync failed for id {doc_id}: {e}")
 
     async def _pg_sync_load_user(self, filter_query: dict) -> dict | None:
         """Asynchronously load user from Neon PostgreSQL if missing in local container."""
@@ -213,7 +214,7 @@ class _FallbackCollection:
                     self._save_one(user_data["id"], user_data)
                     return user_data
         except Exception as e:
-            logger.debug(f"Neon PG user read skipped: {e}")
+            logger.warning(f"Neon PG user read failed: {e}")
         return None
 
     def _delete(self, doc_id: str):
@@ -289,6 +290,7 @@ class _FallbackCollection:
             if "$set" in update_query:
                 doc.update(update_query["$set"])
             self._save_one(doc_id, doc)
+            await self._pg_sync_save(doc_id, doc)
             return type("UpdateResult", (), {"modified_count": 1, "matched_count": 1})()
         elif upsert:
             new_doc = {}

@@ -104,8 +104,16 @@ async def get_current_user(request: Request, authorization: str = Header(None)) 
     # Fetch user from database
     user = await db.db.users.find_one({"id": user_id})
     if not user:
+        # Fallback query directly against Neon PostgreSQL if SQLite cache is empty
+        try:
+            from app.database.database import _fallback_store
+            user = await _fallback_store.users._pg_sync_load_user({"id": user_id})
+        except Exception:
+            user = None
+
+    if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    if not user["is_active"]:
+    if not user.get("is_active", True):
         raise HTTPException(status_code=401, detail="User account is deactivated")
 
     user.pop("_id", None)
