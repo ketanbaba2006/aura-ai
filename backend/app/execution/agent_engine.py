@@ -157,10 +157,11 @@ Ensure the design is professional, futuristic, and premium (vibrant gradients, d
             response_text = ""
             try:
                 # Retrieve executor generated code
-                response_text = await llm_client.chat(
+                resp = await llm_client.chat(
                     messages=[{"role": "user", "content": executor_prompt}],
                     system_prompt="You are AURA's Code Executor. Respond strictly with [FILE: path] blocks for file writes.",
                 )
+                response_text = resp[0] if isinstance(resp, (tuple, list)) else (resp or "")
             except Exception as e:
                 logger.error(f"Executor failed on task '{task['title']}': {e}")
                 response_text = ""
@@ -222,10 +223,11 @@ Please fix the syntax errors. Output only the corrected files strictly in the [F
 corrected code contents
 ```"""
                 try:
-                    response_text = await llm_client.chat(
+                    resp = await llm_client.chat(
                         messages=[{"role": "user", "content": repair_prompt}],
                         system_prompt="You are AURA's Repair Engine. Fix errors and output only valid file blocks.",
                     )
+                    response_text = resp[0] if isinstance(resp, (tuple, list)) else (resp or "")
                     files_written = self._parse_and_write_files(project_dir, response_text, active_project["slug"])
                 except Exception as e:
                     logger.error(f"Repair attempt {attempt} failed: {e}")
