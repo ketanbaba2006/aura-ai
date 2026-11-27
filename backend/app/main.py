@@ -201,17 +201,25 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # ── Mount routers ──
 from app.core.auth_security import get_current_user, require_role
-from app.api.routes import chat, conversations, memory, tools, search, knowledge, logs, settings as settings_route, files, monitoring, auth, projects, research, execution, notebook, identity, quality  # noqa: E402
+from app.api.routes import chat, conversations, memory, tools, search, knowledge, logs, settings as settings_route, files, monitoring, auth, projects, research, execution, notebook, identity, quality, models as models_route, image as image_route  # noqa: E402
 
 # Unprotected Authentication Router (supports both /api/v1/auth and /api/auth)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api")
+
+# Models and Image discovery (accessible publicly / optionally authenticated)
+app.include_router(models_route.router, prefix="/api/v1")
+app.include_router(models_route.router, prefix="/api")
+app.include_router(image_route.router, prefix="/api/v1")
+app.include_router(image_route.router, prefix="/api")
 
 # Protected Workspace / Assistant Routers (supports both /api/v1 and /api)
 app.include_router(chat.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(chat.router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(conversations.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(conversations.router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(conversations.router, prefix="/api/v1/chat", dependencies=[Depends(get_current_user)])
+app.include_router(conversations.router, prefix="/api/chat", dependencies=[Depends(get_current_user)])
 app.include_router(memory.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(tools.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(search.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
@@ -226,10 +234,14 @@ app.include_router(notebook.router, prefix="/api/v1", dependencies=[Depends(get_
 
 # Identity Router (public - no auth required for basic info)
 app.include_router(identity.router, prefix="/api/v1")
+app.include_router(identity.router, prefix="/api")
+
+# Settings & Models Routers (accessible to authenticated users)
+app.include_router(settings_route.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(settings_route.router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 # Protected OWNER-only System Routers
 app.include_router(logs.router, prefix="/api/v1", dependencies=[require_role(["OWNER"])])
-app.include_router(settings_route.router, prefix="/api/v1", dependencies=[require_role(["OWNER"])])
 app.include_router(monitoring.router, prefix="/api/v1", dependencies=[require_role(["OWNER"])])
 
 

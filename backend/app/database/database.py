@@ -164,7 +164,7 @@ class _FallbackCollection:
                 count += 1
         return count
 
-    async def find_one(self, filter_query: dict = None) -> dict | None:
+    async def find_one(self, filter_query: dict = None, projection: dict = None, sort: list = None, *args, **kwargs) -> dict | None:
         data = self._get_all()
         if not filter_query:
             return next(iter(data.values()), None)
@@ -232,6 +232,33 @@ class _FallbackCollection:
                 self._delete(doc["id"])
                 deleted += 1
         return type("DeleteResult", (), {"deleted_count": deleted})()
+
+    def aggregate(self, pipeline: list):
+        # Handle conversation aggregation pipeline gracefully
+        data = list(self._get_all().values())
+        match_stage = next((stage["$match"] for stage in pipeline if "$match" in stage), None)
+        if match_stage:
+            filtered = []
+            for doc in data:
+                if all(doc.get(k) == v for k, v in match_stage.items()):
+                    filtered.append(doc)
+            data = filtered
+
+        # Populate message counts and last message if requested
+        res = []
+        for doc in data:
+            item = dict(doc)
+            item.setdefault("message_count", 0)
+            item.setdefault("last_message", None)
+            res.append(item)
+
+        class _AggrCursor:
+            def __init__(self, items):
+                self._items = items
+            async def to_list(self, length=None):
+                return self._items
+
+        return _AggrCursor(res)
 
     def find(self, filter_query: dict = None):
         items = list(self._get_all().values())
