@@ -44,6 +44,23 @@ async def get_settings():
         **res
     }
 
+@router.put("")
+@router.post("")
+async def update_all_settings(body: dict):
+    """Save global or user custom settings."""
+    settings_dict = body.get("settings", body)
+    if isinstance(settings_dict, dict):
+        for k, v in settings_dict.items():
+            try:
+                await db.db.system_settings.update_one(
+                    {"key": k},
+                    {"$set": {"key": k, "value": v}},
+                    upsert=True
+                )
+            except Exception as e:
+                logger.warning(f"Could not persist setting {k}: {e}")
+    return {"success": True, "settings": settings_dict}
+
 @router.get("/{key}")
 async def get_setting(key: str):
     """Get a specific setting."""
