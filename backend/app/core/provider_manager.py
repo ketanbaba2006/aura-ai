@@ -525,7 +525,18 @@ class ProviderManager:
             # Synthesize intelligent comprehensive response
             query_lower = last_user_query.lower()
             
-            if any(k in query_lower for k in ["trend", "breakthrough", "artificial intelligence", "ai", "future of ai", "llm"]):
+            if any(k in query_lower for k in ["who are you", "who developed you", "who made you", "creator", "developed", "who created", "who built"]):
+                synthesized = (
+                    "### ✦ AURA AI Identity\n\n"
+                    "I am **AURA AI** (Autonomous Universal Reasoning Agent), an advanced cognitive intelligence platform created and developed by **Ketan Lade**.\n\n"
+                    "#### Capabilities & Architecture\n"
+                    "- **Autonomous Reasoning Engine**: Capable of multi-agent goal decomposition, self-repair loops, and deep analytical research.\n"
+                    "- **Multi-Model Orchestration**: Integrated with Groq, Gemini, and OpenRouter with seamless real-time failover.\n"
+                    "- **Sandboxed Workspace**: Native Coding Studio, dynamic live previews, file artifact management, and project export.\n"
+                    "- **Privacy & Persistence**: State persistence across sessions powered by PostgreSQL and resilient local stores.\n\n"
+                    "---\n*Operating under the directive of Ketan Lade.*"
+                )
+            elif any(k in query_lower for k in ["trend", "breakthrough", "artificial intelligence", "ai", "future of ai", "llm"]):
                 synthesized = (
                     "### 🚀 Key Trends & Breakthroughs in Artificial Intelligence\n\n"
                     "The frontier of Artificial Intelligence is experiencing exponential advancement across multiple critical dimensions:\n\n"
@@ -573,7 +584,7 @@ class ProviderManager:
                     f"Here is a comprehensive analysis structured for clarity and actionable utility:\n\n"
                     f"1. **Core Concept & Foundations**: The primary objective focuses on delivering rigorous, structured outcomes with high precision.\n"
                     f"2. **Strategic Recommendations**: Evaluate prerequisites, prioritize modular architecture, and ensure continuous validation across all operational phases.\n"
-                    f"3. **Next Steps**: You can explore deeper execution in the Coding Studio, initiate Deep Research, or refine specific parameters.\n\n"
+                    f"3. **Execution Pathway**: You can explore deeper implementation in the Coding Studio, initiate Deep Research, or refine specific parameters.\n\n"
                     f"---\n*Synthesized autonomously by AURA AI Core Engine.*"
                 )
 
