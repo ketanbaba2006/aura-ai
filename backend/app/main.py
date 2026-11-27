@@ -215,9 +215,14 @@ app.include_router(monitoring.router, prefix="/api/v1", dependencies=[require_ro
 
 
 # ── Health check ──
-@app.get("/health", tags=["System"])
-@app.get("/healthz", tags=["System"])
-@app.get("/api/v1/health", tags=["System"])
+@app.api_route("/", methods=["GET", "HEAD"], tags=["System"])
+async def root_ping():
+    return {"status": "UP", "message": "AURA AI API Online"}
+
+
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["System"])
+@app.api_route("/healthz", methods=["GET", "HEAD"], tags=["System"])
+@app.api_route("/api/v1/health", methods=["GET", "HEAD"], tags=["System"])
 async def health_check():
     """Health check endpoint with dynamic LLM provider telemetry."""
     import time
