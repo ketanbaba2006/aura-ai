@@ -130,18 +130,21 @@ class ProjectManager:
         No keyword heuristics. If no active project is linked to the conversation,
         link the most recently active project globally.
         """
-        # First check if there is already an active project
-        active = await self.get_active_project(conversation_id)
-        if active:
-            return active
+        try:
+            # First check if there is already an active project
+            active = await self.get_active_project(conversation_id)
+            if active:
+                return active
 
-        # Find the most recently updated project
-        row = await db.db.projects.find_one({}, sort=[("updated_at", -1)])
-        if row:
-            project_id = row["id"]
-            await self.set_active_project(conversation_id, project_id)
-            logger.info(f"Persistently linked conversation {conversation_id} to most recent project {project_id}")
-            return await self.get_project(project_id)
+            # Find the most recently updated project
+            row = await db.db.projects.find_one({}, sort=[("updated_at", -1)])
+            if row:
+                project_id = row["id"]
+                await self.set_active_project(conversation_id, project_id)
+                logger.info(f"Persistently linked conversation {conversation_id} to most recent project {project_id}")
+                return await self.get_project(project_id)
+        except Exception as e:
+            logger.warning(f"detect_and_link_project failed (non-fatal): {e}")
             
         return None
 

@@ -474,10 +474,14 @@ class RouterEngine:
 
         # Smart project detection & creation linking (Intent-Driven)
         active_project = None
-        if category in ("WEBSITE_BUILDER", "APP_BUILDER", "AGENT"):
-            active_project = await project_manager.get_active_project(conversation_id)
-            if not active_project:
-                active_project = await project_manager.detect_and_link_project(conversation_id, actual_message)
+        if category in ("WEBSITE_BUILDER", "APP_BUILDER"):
+            try:
+                active_project = await project_manager.get_active_project(conversation_id)
+                if not active_project:
+                    active_project = await project_manager.detect_and_link_project(conversation_id, actual_message)
+            except Exception as e:
+                logger.warning(f"Project detection failed (non-fatal): {e}")
+                active_project = None
 
             is_create_intent = category in ("WEBSITE_BUILDER", "APP_BUILDER")
             create_trigger = False
@@ -696,7 +700,9 @@ class RouterEngine:
         # Intent Routing Decision
         decision = await self.intent_router.route(actual_message)
         # Override decision based on new strict intent categories
-        if category in ("WEBSITE_BUILDER", "APP_BUILDER", "AGENT"):
+        # WEBSITE_BUILDER and APP_BUILDER route to project planner if an explicit build/code directive was given.
+        # General agent questions or conversation queries respond conversationally.
+        if category in ("WEBSITE_BUILDER", "APP_BUILDER"):
             decision.needs_tool = False
             decision.needs_search = False
             decision.needs_knowledge = False
@@ -715,7 +721,7 @@ class RouterEngine:
             decision.tool_params = {"query": actual_message}
             decision.reasoning = "Classified as FILE ANALYSIS"
         else:
-            # CHAT, CODING, DOCUMENT_GENERATION
+            # CHAT, AGENT, CODING, DOCUMENT_GENERATION
             # Respond naturally like ChatGPT. No forced website builder. No file creation.
             decision.needs_tool = False
             decision.needs_search = False

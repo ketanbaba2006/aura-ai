@@ -225,8 +225,15 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
 @router.post("/refresh")
 async def refresh(request: Request, response: Response):
-    """Re-issues access token using the HttpOnly refresh token cookie."""
+    """Re-issues access token using the HttpOnly refresh token cookie or JSON body."""
+    # Accept token from HttpOnly cookie first, then fall back to JSON body
     refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        try:
+            body = await request.json()
+            refresh_token = body.get("refreshToken") or body.get("refresh_token")
+        except Exception:
+            pass
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token cookie missing")
 
@@ -256,6 +263,7 @@ async def refresh(request: Request, response: Response):
 
     return {
         "success": True,
+        "accessToken": new_access_token,
         "access_token": new_access_token,
         "user": {
             "id": user_id,
